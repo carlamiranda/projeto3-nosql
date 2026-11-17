@@ -6,7 +6,8 @@
 //   1. Conecta no Cassandra e cria o keyspace e as tabelas (se não existirem).
 //   2. Entrega a página do chat (pasta "public").
 //   3. Recebe as ações do chat pelo Socket.IO (tempo real) e executa o CRUD
-//      no Cassandra: INSERT, SELECT, UPDATE e DELETE.
+//      no Cassandra: inserção (INSERT), atualização (UPDATE), alteração
+//      (ALTER TABLE) e exclusão (DELETE), além da leitura (SELECT).
 // =====================================================================
 
 const path = require('path');
@@ -31,6 +32,10 @@ const LIMITE_HISTORICO = 50;      // quantas mensagens carregar ao abrir um cana
 const TAMANHO_MAX_TEXTO = 2000;
 const TAMANHO_MAX_NOME = 32;
 const EMOJIS_PERMITIDOS = ['👍', '❤️', '😂', '🔥'];
+
+// Coluna usada na operação de alteração (ALTER TABLE) da demo:
+// "fixada" marcaria as mensagens fixadas no canal.
+const COLUNA_ALTERACAO = { nome: 'fixada', tipo: 'boolean' };
 
 // Canais que já vêm criados no banco
 const CANAIS_INICIAIS = [
@@ -92,7 +97,7 @@ const CQL = {
   editarMensagemComTtl:
     `UPDATE ${KEYSPACE}.mensagens_por_canal USING TTL ? SET texto = ?, editada = true WHERE canal_id = ? AND bucket = ? AND mensagem_id = ?`,
 
-  // U - Update (alteração: adicionar reação na coluna map)
+  // Extra (não faz parte das 4 operações pedidas): reagir, na coluna map
   reagir:
     `UPDATE ${KEYSPACE}.mensagens_por_canal SET reacoes = reacoes + ? WHERE canal_id = ? AND bucket = ? AND mensagem_id = ?`,
   reagirComTtl:
@@ -101,6 +106,18 @@ const CQL = {
   // D - Delete (exclusão)
   apagarMensagem:
     `DELETE FROM ${KEYSPACE}.mensagens_por_canal WHERE canal_id = ? AND bucket = ? AND mensagem_id = ?`,
+
+  // Alteração (ALTER TABLE): muda a ESTRUTURA da tabela, adicionando ou
+  // removendo uma coluna. Nenhuma mensagem é reescrita: as linhas que já
+  // existem ficam com a coluna nova vazia (null).
+  adicionarColuna:
+    `ALTER TABLE ${KEYSPACE}.mensagens_por_canal ADD ${COLUNA_ALTERACAO.nome} ${COLUNA_ALTERACAO.tipo}`,
+  removerColuna:
+    `ALTER TABLE ${KEYSPACE}.mensagens_por_canal DROP ${COLUNA_ALTERACAO.nome}`,
+
+  // Estrutura atual da tabela, lida do catálogo do próprio Cassandra
+  lerEstrutura:
+    `SELECT column_name, type, kind, position FROM system_schema.columns WHERE keyspace_name = ? AND table_name = ?`,
 };
 
 // ---------------------------------------------------------------------
@@ -162,6 +179,31 @@ function esperar(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Fila por chave: executa uma tarefa de cada vez para a mesma chave.
+// Usada nas reações: o servidor lê a contagem, soma 1 e grava. Esse
+// "ler, somar e gravar" NÃO é atômico no Cassandra; sem a fila, dois cliques
+// ao mesmo tempo leriam o mesmo valor e um deles se perderia.
+// (Num sistema real com vários servidores, o certo seria uma tabela com
+// coluna do tipo counter, que o próprio Cassandra soma de forma atômica.)
+const filas = new Map();
+function emFila(chave, tarefa) {
+  const anterior = filas.get(chave) || Promise.resolve();
+  const atual = anterior.catch(() => {}).then(tarefa);
+  filas.set(chave, atual);
+  atual.catch(() => {}).finally(() => {
+    if (filas.get(chave) === atual) filas.delete(chave);
+  });
+  return atual;
+}
+
+// Uma reação é válida se for um dos emojis da página ou se já existir na
+// mensagem (por exemplo, 'curtir', gravado pelo cqlsh no plano B da demo).
+function reacaoValida(emoji, reacoesAtuais) {
+  if (EMOJIS_PERMITIDOS.includes(emoji)) return true;
+  return typeof emoji === 'string' && emoji.length <= 32
+    && Object.prototype.hasOwnProperty.call(reacoesAtuais || {}, emoji);
+}
+
 // ---------------------------------------------------------------------
 // Conexão com o Cassandra
 // ---------------------------------------------------------------------
@@ -214,7 +256,7 @@ const MENSAGENS_INICIAIS = {
   ],
   nosql: [
     'Canal do Projeto 3 de Bancos de Dados NoSQL. Paradigma: orientado a coluna (wide column store). Banco: Apache Cassandra.',
-    'Aqui fazemos o CRUD ao vivo: enviar (INSERT), abrir o canal (SELECT), editar e reagir (UPDATE) e apagar (DELETE).',
+    'Aqui fazemos o CRUD ao vivo: enviar (INSERT), editar (UPDATE), alterar a tabela (ALTER TABLE, no painel à direita) e apagar (DELETE).',
   ],
   cassandra: [
     'Dica: olhe o Console do Cassandra à direita. Cada ação no chat vira um comando CQL.',
@@ -262,9 +304,10 @@ app.get('/saude', (req, res) => {
 });
 
 // Executa um comando no Cassandra e mostra o CQL no "Console do Cassandra" da página
-async function executar(nomeOperacao, query, params) {
+async function executar(nomeOperacao, query, params = []) {
   const inicio = Date.now();
-  const resultado = await client.execute(query, params, { prepare: true });
+  // Comandos de estrutura (ALTER TABLE) não usam prepared statement
+  const resultado = await client.execute(query, params, { prepare: params.length > 0 });
   io.emit('cql', {
     operacao: nomeOperacao,
     cql: cqlComValores(query, params),
@@ -293,6 +336,24 @@ function validarReferencia(dados) {
   return { canalId: dados.canal, bucket, mensagemId };
 }
 
+// Ordem das colunas como no CREATE TABLE: partição, clustering e depois as demais
+const ORDEM_TIPO_COLUNA = { partition_key: 0, clustering: 1, static: 2, regular: 3 };
+
+// Lê a estrutura atual da tabela de mensagens no catálogo do Cassandra
+async function lerEstrutura() {
+  const resultado = await client.execute(CQL.lerEstrutura, [KEYSPACE, 'mensagens_por_canal'], { prepare: true });
+  const colunas = resultado.rows
+    .map((l) => ({ nome: l.column_name, tipo: l.type, papel: l.kind, posicao: l.position }))
+    .sort((a, b) => (ORDEM_TIPO_COLUNA[a.papel] - ORDEM_TIPO_COLUNA[b.papel])
+      || (a.posicao - b.posicao) || a.nome.localeCompare(b.nome));
+  return {
+    tabela: `${KEYSPACE}.mensagens_por_canal`,
+    colunas,
+    colunaAlteracao: COLUNA_ALTERACAO,
+    temColunaAlteracao: colunas.some((c) => c.nome === COLUNA_ALTERACAO.nome),
+  };
+}
+
 // Lê a mensagem de novo no banco e avisa todo mundo que está no canal
 async function avisarAtualizacao(canalId, bucket, mensagemId) {
   const atualizada = await buscarMensagem(canalId, bucket, mensagemId);
@@ -318,8 +379,22 @@ function tratar(socket, acao) {
 }
 
 io.on('connection', (socket) => {
-  // Lista de canais para a barra lateral
+  // Lista de canais para a barra lateral e estrutura atual da tabela
   socket.emit('canais', Array.from(canais.values()));
+  lerEstrutura().then((e) => socket.emit('estrutura', e)).catch((e) => console.error('Erro:', e.message));
+
+  // Alteração: ALTER TABLE adicionando a coluna (ou removendo, para ensaiar de novo)
+  socket.on('alterar_tabela', tratar(socket, async (dados) => {
+    const acao = dados && dados.acao;
+    if (acao !== 'adicionar' && acao !== 'remover') throw new Error('Ação inválida.');
+    await emFila('estrutura', async () => {
+      const antes = await lerEstrutura();
+      if (acao === 'adicionar' && antes.temColunaAlteracao) throw new Error(`A coluna "${COLUNA_ALTERACAO.nome}" já existe.`);
+      if (acao === 'remover' && !antes.temColunaAlteracao) throw new Error(`A coluna "${COLUNA_ALTERACAO.nome}" não existe.`);
+      await executar('ALTER', acao === 'adicionar' ? CQL.adicionarColuna : CQL.removerColuna);
+      io.emit('estrutura', await lerEstrutura());
+    });
+  }));
 
   // R - Read: abrir um canal e carregar as mensagens
   socket.on('entrar_canal', tratar(socket, async (dados) => {
@@ -401,25 +476,29 @@ io.on('connection', (socket) => {
     await avisarAtualizacao(canalId, bucket, mensagemId);
   }));
 
-  // U - Update (alteração): adicionar uma reação na coluna map
+  // Extra: reagir (UPDATE na coluna map). Não é uma das 4 operações pedidas.
   socket.on('reagir', tratar(socket, async (dados) => {
     const { canalId, bucket, mensagemId } = validarReferencia(dados);
-    if (!EMOJIS_PERMITIDOS.includes(dados.emoji)) throw new Error('Reação inválida.');
+    if (typeof dados.emoji !== 'string') throw new Error('Reação inválida.');
 
-    const atual = await buscarMensagem(canalId, bucket, mensagemId);
-    if (!atual) throw new Error('Essa mensagem não existe mais.');
+    // Uma reação por vez em cada mensagem (veja emFila)
+    await emFila(`${canalId}|${bucket}|${mensagemId}`, async () => {
+      const atual = await buscarMensagem(canalId, bucket, mensagemId);
+      if (!atual) throw new Error('Essa mensagem não existe mais.');
 
-    const reacoes = atual.reacoes || {};
-    const novaContagem = (reacoes[dados.emoji] || 0) + 1;
-    const alteracao = { [dados.emoji]: novaContagem };
+      const reacoes = atual.reacoes || {};
+      if (!reacaoValida(dados.emoji, reacoes)) throw new Error('Reação inválida.');
+      const novaContagem = (reacoes[dados.emoji] || 0) + 1;
+      const alteracao = { [dados.emoji]: novaContagem };
 
-    if (atual.segundos_restantes) {
-      await executar('UPDATE', CQL.reagirComTtl, [atual.segundos_restantes, alteracao, canalId, bucket, mensagemId]);
-    } else {
-      await executar('UPDATE', CQL.reagir, [alteracao, canalId, bucket, mensagemId]);
-    }
+      if (atual.segundos_restantes) {
+        await executar('UPDATE', CQL.reagirComTtl, [atual.segundos_restantes, alteracao, canalId, bucket, mensagemId]);
+      } else {
+        await executar('UPDATE', CQL.reagir, [alteracao, canalId, bucket, mensagemId]);
+      }
 
-    await avisarAtualizacao(canalId, bucket, mensagemId);
+      await avisarAtualizacao(canalId, bucket, mensagemId);
+    });
   }));
 
   // D - Delete: apagar mensagem
@@ -452,10 +531,18 @@ if (require.main === module) {
     process.exit(1);
   });
 
-  process.on('SIGINT', async () => {
-    await client.shutdown();
+  // Ctrl + C (SIGINT) e "docker compose down" (SIGTERM): fecha a conexão e sai.
+  // Sem o SIGTERM, o Docker espera 10 s e mata o processo à força.
+  const desligar = async () => {
+    io.close();
+    await client.shutdown().catch(() => {});
     process.exit(0);
-  });
+  };
+  process.on('SIGINT', desligar);
+  process.on('SIGTERM', desligar);
 }
 
-module.exports = { bucketDaData, bucketAnterior, cqlComValores, formatarValorCql, prepararBanco, preencherCanaisVazios, CQL };
+module.exports = {
+  bucketDaData, bucketAnterior, cqlComValores, formatarValorCql, emFila, reacaoValida,
+  prepararBanco, preencherCanaisVazios, CQL, COLUNA_ALTERACAO,
+};

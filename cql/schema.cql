@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS canais (
 -- "mensagens do canal X, das mais novas para as mais antigas".
 --   Chave de partição: (canal_id, bucket)  -> cada canal, em cada mês, é uma partição
 --   Clustering:        mensagem_id DESC    -> já vem ordenado, mais nova primeiro
---   reacoes:           coluna map          -> só existe nas mensagens que receberam reação
+--   reacoes:           coluna map          -> só é gravada nas mensagens que receberam reação
 CREATE TABLE IF NOT EXISTS mensagens_por_canal (
   canal_id    text,
   bucket      int,        -- mês da mensagem no formato AAAAMM, ex.: 202611

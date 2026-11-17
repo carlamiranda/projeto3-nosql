@@ -57,6 +57,15 @@
         <span>Console do Cassandra</span>
         <button id="limpar-console" type="button" title="Limpar">Limpar</button>
       </div>
+      <!-- Alteração: ALTER TABLE muda a estrutura da tabela -->
+      <section class="estrutura" aria-labelledby="titulo-estrutura">
+        <div class="estrutura-topo">
+          <span id="titulo-estrutura">Estrutura da tabela</span>
+          <code id="nome-tabela"></code>
+        </div>
+        <ul id="lista-colunas" class="lista-colunas"></ul>
+        <button id="botao-alter" type="button" class="botao-alter" disabled>ALTER TABLE</button>
+      </section>
       <p class="console-dica">Cada ação no chat executa um comando CQL. Ele aparece aqui.</p>
       <ol id="lista-cql" class="lista-cql"></ol>
     </aside>
