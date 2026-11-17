@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mini Discord · Apache Cassandra</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Tela de entrada: só pede o nome -->
+  <div id="entrada" class="entrada">
+    <form id="form-entrada" class="entrada-caixa">
+      <h1>Mini Discord</h1>
+      <p>Chat em tempo real com <b>Apache Cassandra</b> (wide column store)</p>
+      <label for="campo-nome">Como você quer ser chamado?</label>
+      <input id="campo-nome" type="text" maxlength="32" placeholder="Seu nome" autocomplete="off" required>
+      <button type="submit">Entrar no chat</button>
+    </form>
+  </div>
+
+  <div id="app" class="app" hidden>
+    <!-- Barra lateral: canais -->
+    <aside class="lateral">
+      <div class="servidor">Projeto 3 · NoSQL</div>
+      <p class="titulo-secao">Canais de texto</p>
+      <ul id="lista-canais" class="lista-canais"></ul>
+      <div class="usuario">
+        <span id="avatar-usuario" class="avatar pequeno"></span>
+        <span id="nome-usuario" class="nome-usuario"></span>
+        <span id="status-conexao" class="status desconectado" title="Conexão">●</span>
+      </div>
+    </aside>
+
+    <!-- Área central: mensagens -->
+    <main class="centro">
+      <header class="topo">
+        <span class="hash">#</span>
+        <span id="nome-canal" class="nome-canal"></span>
+        <span id="descricao-canal" class="descricao-canal"></span>
+        <span id="info-particao" class="info-particao" title="Chave de partição desta conversa"></span>
+      </header>
+
+      <div id="mensagens" class="mensagens"></div>
+
+      <form id="form-mensagem" class="caixa-envio">
+        <input id="campo-mensagem" type="text" maxlength="2000" placeholder="Conversar" autocomplete="off">
+        <label class="opcao-temporaria" title="A mensagem some sozinha do banco depois de 60 segundos (TTL)">
+          <input id="campo-temporaria" type="checkbox"> ⏳ Temporária (60 s)
+        </label>
+        <button type="submit">Enviar</button>
+      </form>
+    </main>
+
+    <!-- Painel direito: o que está rodando no Cassandra -->
+    <aside class="console">
+      <div class="console-topo">
+        <span>Console do Cassandra</span>
+        <button id="limpar-console" type="button" title="Limpar">Limpar</button>
+      </div>
+      <p class="console-dica">Cada ação no chat executa um comando CQL. Ele aparece aqui.</p>
+      <ol id="lista-cql" class="lista-cql"></ol>
+    </aside>
+  </div>
+
+  <div id="aviso" class="aviso" hidden></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

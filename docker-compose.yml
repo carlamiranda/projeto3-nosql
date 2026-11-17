@@ -1,0 +1,39 @@
+# Sobe o Cassandra e o chat juntos com:  docker compose up --build
+services:
+
+  # Banco de dados: Apache Cassandra 5.0 (1 nó, para estudo)
+  cassandra:
+    image: cassandra:5.0
+    container_name: cassandra-chat
+    ports:
+      - "9042:9042"
+    environment:
+      # Limita a memória do Cassandra para caber em notebooks
+      - MAX_HEAP_SIZE=512M
+      - HEAP_NEWSIZE=128M
+    volumes:
+      - dados-cassandra:/var/lib/cassandra
+    healthcheck:
+      # Só considera "pronto" quando o cqlsh consegue conversar com o banco
+      test: ["CMD-SHELL", "cqlsh -e 'DESCRIBE KEYSPACES' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  # Servidor do chat (Node.js + Express + Socket.IO)
+  chat:
+    build: .
+    container_name: chat-app
+    ports:
+      - "3000:3000"
+    environment:
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+      - CASSANDRA_DC=datacenter1
+    depends_on:
+      cassandra:
+        condition: service_healthy
+
+volumes:
+  dados-cassandra:
