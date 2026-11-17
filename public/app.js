@@ -352,7 +352,7 @@ function comecarEdicao(id) {
   });
 }
 
-// U - Update (alteração): reagir
+// Extra: reagir (UPDATE na coluna map). Não é uma das 4 operações pedidas.
 function reagir(id, emoji) {
   const msg = estado.mensagens.get(id);
   if (msg) pedir('reagir', { ...referencia(msg), emoji });
@@ -408,3 +408,47 @@ socket.on('cql', (registro) => {
 });
 
 el('limpar-console').addEventListener('click', () => { listaCql.innerHTML = ''; });
+
+// ---------- Alteração: ALTER TABLE ----------
+const NOMES_PAPEL = { partition_key: 'partição', clustering: 'clustering' };
+const botaoAlter = el('botao-alter');
+let estrutura = null;
+
+// Mostra as colunas da tabela, lidas do catálogo do Cassandra
+socket.on('estrutura', (dados) => {
+  const novaColuna = estrutura && !estrutura.temColunaAlteracao && dados.temColunaAlteracao;
+  estrutura = dados;
+  el('nome-tabela').textContent = dados.tabela;
+
+  const lista = el('lista-colunas');
+  lista.innerHTML = '';
+  for (const coluna of dados.colunas) {
+    const item = document.createElement('li');
+    if (coluna.nome === dados.colunaAlteracao.nome) item.className = novaColuna ? 'alterada nova' : 'alterada';
+    const nome = document.createElement('span');
+    nome.className = 'coluna-nome';
+    nome.textContent = coluna.nome;
+    const tipo = document.createElement('span');
+    tipo.className = 'coluna-tipo';
+    tipo.textContent = coluna.tipo + (NOMES_PAPEL[coluna.papel] ? ` · ${NOMES_PAPEL[coluna.papel]}` : '');
+    item.append(nome, tipo);
+    lista.appendChild(item);
+  }
+
+  const { nome, tipo } = dados.colunaAlteracao;
+  botaoAlter.disabled = false;
+  botaoAlter.textContent = dados.temColunaAlteracao
+    ? `ALTER TABLE … DROP ${nome}`
+    : `ALTER TABLE … ADD ${nome} ${tipo}`;
+  botaoAlter.title = dados.temColunaAlteracao
+    ? 'Remove a coluna (para ensaiar a demo de novo)'
+    : 'Adiciona uma coluna nova na tabela de mensagens';
+  botaoAlter.classList.toggle('remover', dados.temColunaAlteracao);
+});
+
+botaoAlter.addEventListener('click', async () => {
+  if (!estrutura) return;
+  botaoAlter.disabled = true;
+  await pedir('alterar_tabela', { acao: estrutura.temColunaAlteracao ? 'remover' : 'adicionar' });
+  botaoAlter.disabled = false;
+});
