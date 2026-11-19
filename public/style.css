@@ -57,7 +57,9 @@ button { font: inherit; cursor: pointer; }
 .app {
   display: grid;
   grid-template-columns: 240px 1fr 360px;
+  grid-template-rows: minmax(0, 1fr); /* a linha não cresce com o conteúdo */
   height: 100vh;
+  overflow: hidden;
 }
 
 /* ---------- Barra lateral ---------- */
@@ -203,8 +205,10 @@ button { font: inherit; cursor: pointer; }
 .console {
   background: var(--fundo-console);
   display: flex; flex-direction: column; min-width: 0;
+  min-height: 0; overflow: hidden; /* só a lista de CQL rola */
   border-left: 1px solid #1E1F22;
 }
+.console-topo, .estrutura, .console-dica { flex-shrink: 0; }
 .console-topo {
   display: flex; justify-content: space-between; align-items: center;
   padding: 14px 16px; font-weight: 700; border-bottom: 1px solid #1E1F22;
@@ -214,7 +218,14 @@ button { font: inherit; cursor: pointer; }
   border-radius: 4px; padding: 2px 8px; font-size: 12px;
 }
 .console-dica { margin: 8px 16px; font-size: 12px; color: var(--texto-suave); }
-.lista-cql { list-style: none; margin: 0; padding: 0 12px 12px; overflow-y: auto; flex: 1; }
+.lista-cql {
+  list-style: none; margin: 0; padding: 0 12px 12px;
+  overflow-y: auto; flex: 1; min-height: 0;
+  scrollbar-width: thin; scrollbar-color: #3F4147 transparent;
+}
+.lista-cql::-webkit-scrollbar { width: 8px; }
+.lista-cql::-webkit-scrollbar-thumb { background: #3F4147; border-radius: 4px; }
+.lista-cql::-webkit-scrollbar-track { background: transparent; }
 .lista-cql li {
   background: var(--fundo-lateral); border-radius: 6px;
   padding: 8px 10px; margin-bottom: 8px;
