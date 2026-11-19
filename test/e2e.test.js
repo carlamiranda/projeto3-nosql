@@ -46,12 +46,20 @@ test('CRUD completo pelo chat, em tempo real', async (t) => {
   if (estruturaInicial.temColunaAlteracao) { // sobrou de um ensaio: volta ao início
     assert.ok((await pedir(a, 'alterar_tabela', { acao: 'remover' })).ok);
   }
+  // Sem a coluna, não dá para fixar
+  assert.ok(!(await pedir(a, 'fixar', { ...ref, fixada: true })).ok, 'fixar sem a coluna deveria falhar');
   const estruturaNova = new Promise((r) => b.on('estrutura', (e) => { if (e.temColunaAlteracao) r(e); }));
   assert.ok((await pedir(a, 'alterar_tabela', { acao: 'adicionar' })).ok);
   assert.ok((await estruturaNova).colunas.some((c) => c.nome === coluna), 'coluna nova não apareceu');
   assert.ok(!(await pedir(a, 'alterar_tabela', { acao: 'adicionar' })).ok, 'ADD repetido deveria falhar');
-  // a mensagem continua legível depois do ALTER
-  assert.ok((await pedir(a, 'entrar_canal', { canal: CANAL })).mensagens.some((m) => m.id === msg.id));
+  // a mensagem continua legível depois do ALTER, com a coluna nova vazia
+  const aposAlter = (await pedir(a, 'entrar_canal', { canal: CANAL })).mensagens.find((m) => m.id === msg.id);
+  assert.ok(aposAlter && aposAlter.fixada === false);
+  // Fixar usa a coluna nova (UPDATE), e o outro cliente fica sabendo
+  const fixou = new Promise((r) => b.on('mensagem_atualizada', (m) => { if (m.id === msg.id && m.fixada) r(m); }));
+  assert.ok((await pedir(b, 'fixar', { ...ref, fixada: true })).ok);
+  await fixou;
+  assert.ok((await pedir(a, 'entrar_canal', { canal: CANAL })).mensagens.find((m) => m.id === msg.id).fixada);
   if (!estruturaInicial.temColunaAlteracao) { // deixa a tabela como estava
     assert.ok((await pedir(a, 'alterar_tabela', { acao: 'remover' })).ok);
   }

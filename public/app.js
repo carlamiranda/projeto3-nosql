@@ -16,6 +16,7 @@ const estado = {
   canais: [],
   mensagens: new Map(), // id -> mensagem
   timersTemporarias: new Map(), // id -> intervalo do contador
+  colunaFixada: false, // a coluna "fixada" existe? (só depois do ALTER TABLE)
 };
 
 // ---------- Elementos da página ----------
@@ -164,8 +165,9 @@ function rolarParaBaixo() {
 
 function montarMensagem(msg) {
   const minha = ehMinha(msg);
+  const fixada = estado.colunaFixada && msg.fixada;
   const bloco = document.createElement('div');
-  bloco.className = 'mensagem' + (msg.ttl ? ' temporaria' : '') + (minha ? ' minha' : '');
+  bloco.className = 'mensagem' + (msg.ttl ? ' temporaria' : '') + (minha ? ' minha' : '') + (fixada ? ' fixada' : '');
   bloco.dataset.id = msg.id;
   bloco.tabIndex = 0;
 
@@ -183,6 +185,12 @@ function montarMensagem(msg) {
   hora.className = 'hora';
   hora.textContent = formatarHora(msg.criadaEm);
   cabecalho.append(autor);
+  if (fixada) {
+    const marca = document.createElement('span');
+    marca.className = 'marca-fixada';
+    marca.textContent = '📌 fixada';
+    cabecalho.appendChild(marca);
+  }
   if (minha) {
     const voce = document.createElement('span');
     voce.className = 'voce';
@@ -229,6 +237,12 @@ function montarMensagem(msg) {
   acoes.className = 'acoes';
   for (const emoji of EMOJIS) {
     acoes.appendChild(criarBotaoAcao(emoji, `Reagir com ${emoji}`, () => reagir(msg.id, emoji)));
+  }
+  // Fixar: o botão só existe depois do ALTER TABLE criar a coluna "fixada"
+  if (estado.colunaFixada) {
+    const botaoFixar = criarBotaoAcao('📌', fixada ? 'Desafixar mensagem' : 'Fixar mensagem', () => fixar(msg.id));
+    if (fixada) botaoFixar.classList.add('ativo');
+    acoes.appendChild(botaoFixar);
   }
   // Só quem mandou pode editar ou apagar
   if (minha) {
@@ -358,6 +372,12 @@ function reagir(id, emoji) {
   if (msg) pedir('reagir', { ...referencia(msg), emoji });
 }
 
+// Fixar / desafixar: UPDATE na coluna criada pelo ALTER TABLE
+function fixar(id) {
+  const msg = estado.mensagens.get(id);
+  if (msg) pedir('fixar', { ...referencia(msg), fixada: !msg.fixada });
+}
+
 // D - Delete: apagar
 function apagarMensagem(id) {
   const msg = estado.mensagens.get(id);
@@ -418,6 +438,17 @@ let estrutura = null;
 socket.on('estrutura', (dados) => {
   const novaColuna = estrutura && !estrutura.temColunaAlteracao && dados.temColunaAlteracao;
   estrutura = dados;
+
+  // A coluna "fixada" apareceu ou sumiu: redesenha as mensagens para o botão 📌
+  // aparecer ou sumir. Logo depois do ADD a coluna está vazia (null) em todas;
+  // depois do DROP, os valores somem junto com a coluna.
+  if (estado.colunaFixada !== dados.temColunaAlteracao) {
+    estado.colunaFixada = dados.temColunaAlteracao;
+    for (const msg of estado.mensagens.values()) {
+      if (!estado.colunaFixada) msg.fixada = false;
+      substituirMensagem(msg);
+    }
+  }
   el('nome-tabela').textContent = dados.tabela;
 
   const lista = el('lista-colunas');
