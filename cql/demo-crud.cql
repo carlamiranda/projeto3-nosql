@@ -70,6 +70,15 @@ ALTER TABLE mensagens_por_canal ADD fixada boolean;
 SELECT autor, texto, editada, fixada FROM mensagens_por_canal
 WHERE canal_id = 'nosql' AND bucket = 202611;
 
+-- Agora a coluna nova pode ser usada: fixar a mensagem da ana.
+-- (Antes do ALTER, este UPDATE daria erro: a coluna não existia.)
+UPDATE mensagens_por_canal SET fixada = true
+WHERE canal_id = 'nosql' AND bucket = 202611
+  AND mensagem_id = 78e409b4-e282-11f1-87c4-25f2224dcd43;
+
+SELECT autor, texto, fixada FROM mensagens_por_canal
+WHERE canal_id = 'nosql' AND bucket = 202611;
+
 -- ---------- PARTE 5: DELETE (exclusão) ----------
 -- Por baixo, o DELETE grava um tombstone; o dado some de vez na compactação.
 DELETE FROM mensagens_por_canal

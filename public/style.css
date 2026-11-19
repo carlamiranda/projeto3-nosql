@@ -149,6 +149,15 @@ button { font: inherit; cursor: pointer; }
 .mensagem.temporaria .corpo { box-shadow: inset 3px 0 0 var(--laranja); }
 .mensagem.minha.temporaria .corpo { box-shadow: inset -3px 0 0 var(--laranja); }
 
+/* Mensagem fixada (coluna "fixada" = true, criada pelo ALTER TABLE) */
+.mensagem.fixada .corpo { outline: 2px solid var(--verde); outline-offset: -2px; }
+.marca-fixada {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  background: var(--verde); color: #fff;
+  padding: 1px 6px; border-radius: 4px;
+}
+.acoes button.ativo { background: rgba(35, 165, 90, .25); }
+
 .avatar {
   width: 40px; height: 40px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;

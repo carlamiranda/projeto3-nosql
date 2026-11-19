@@ -34,7 +34,8 @@ const TAMANHO_MAX_NOME = 32;
 const EMOJIS_PERMITIDOS = ['👍', '❤️', '😂', '🔥'];
 
 // Coluna usada na operação de alteração (ALTER TABLE) da demo:
-// "fixada" marcaria as mensagens fixadas no canal.
+// "fixada" marca as mensagens fixadas no canal. Enquanto a coluna não existe,
+// o chat não tem o botão de fixar; depois do ALTER TABLE, ele aparece.
 const COLUNA_ALTERACAO = { nome: 'fixada', tipo: 'boolean' };
 
 // Canais que já vêm criados no banco
@@ -85,11 +86,16 @@ const CQL = {
   inserirMensagemTemporaria:
     `INSERT INTO ${KEYSPACE}.mensagens_por_canal (canal_id, bucket, mensagem_id, autor, texto, editada) VALUES (?, ?, ?, ?, ?, false) USING TTL ${TTL_TEMPORARIA}`,
 
-  // R - Read (leitura)
+  // R - Read (leitura). As versões "ComFixada" leem também a coluna criada
+  // pelo ALTER TABLE; só podem ser usadas quando ela existe.
   lerMensagens:
     `SELECT mensagem_id, autor, texto, editada, reacoes, TTL(texto) AS segundos_restantes FROM ${KEYSPACE}.mensagens_por_canal WHERE canal_id = ? AND bucket = ? LIMIT ?`,
+  lerMensagensComFixada:
+    `SELECT mensagem_id, autor, texto, editada, reacoes, ${COLUNA_ALTERACAO.nome}, TTL(texto) AS segundos_restantes FROM ${KEYSPACE}.mensagens_por_canal WHERE canal_id = ? AND bucket = ? LIMIT ?`,
   lerUmaMensagem:
     `SELECT mensagem_id, autor, texto, editada, reacoes, TTL(texto) AS segundos_restantes FROM ${KEYSPACE}.mensagens_por_canal WHERE canal_id = ? AND bucket = ? AND mensagem_id = ?`,
+  lerUmaMensagemComFixada:
+    `SELECT mensagem_id, autor, texto, editada, reacoes, ${COLUNA_ALTERACAO.nome}, TTL(texto) AS segundos_restantes FROM ${KEYSPACE}.mensagens_por_canal WHERE canal_id = ? AND bucket = ? AND mensagem_id = ?`,
 
   // U - Update (atualização: editar o texto)
   editarMensagem:
@@ -102,6 +108,12 @@ const CQL = {
     `UPDATE ${KEYSPACE}.mensagens_por_canal SET reacoes = reacoes + ? WHERE canal_id = ? AND bucket = ? AND mensagem_id = ?`,
   reagirComTtl:
     `UPDATE ${KEYSPACE}.mensagens_por_canal USING TTL ? SET reacoes = reacoes + ? WHERE canal_id = ? AND bucket = ? AND mensagem_id = ?`,
+
+  // Fixar / desafixar: UPDATE na coluna criada pelo ALTER TABLE
+  fixarMensagem:
+    `UPDATE ${KEYSPACE}.mensagens_por_canal SET ${COLUNA_ALTERACAO.nome} = ? WHERE canal_id = ? AND bucket = ? AND mensagem_id = ?`,
+  fixarMensagemComTtl:
+    `UPDATE ${KEYSPACE}.mensagens_por_canal USING TTL ? SET ${COLUNA_ALTERACAO.nome} = ? WHERE canal_id = ? AND bucket = ? AND mensagem_id = ?`,
 
   // D - Delete (exclusão)
   apagarMensagem:
@@ -166,6 +178,7 @@ function linhaParaMensagem(linha, canalId, bucket) {
     autor: linha.autor,
     texto: linha.texto,
     editada: Boolean(linha.editada),
+    fixada: Boolean(linha[COLUNA_ALTERACAO.nome]),
     reacoes: linha.reacoes || {},
     ttl: linha.segundos_restantes === null || linha.segundos_restantes === undefined ? null : Number(linha.segundos_restantes),
   };
@@ -317,9 +330,22 @@ async function executar(nomeOperacao, query, params = []) {
   return resultado;
 }
 
+// Leitura que inclui a coluna "fixada" quando ela existe. Se alguém removeu a
+// coluna pelo cqlsh (e o servidor ainda não sabia), atualiza e tenta de novo.
+async function lerComFixada(semFixada, comFixada, params) {
+  const consulta = () => (estruturaAtual && estruturaAtual.temColunaAlteracao ? comFixada : semFixada);
+  try {
+    return await executar('READ', consulta(), params);
+  } catch (erro) {
+    if (!erro.message.includes(COLUNA_ALTERACAO.nome)) throw erro;
+    await sincronizarEstrutura();
+    return executar('READ', consulta(), params);
+  }
+}
+
 // Busca uma mensagem pela chave primária completa (partição + clustering)
 async function buscarMensagem(canalId, bucket, mensagemId) {
-  const resultado = await executar('READ', CQL.lerUmaMensagem, [canalId, bucket, mensagemId]);
+  const resultado = await lerComFixada(CQL.lerUmaMensagem, CQL.lerUmaMensagemComFixada, [canalId, bucket, mensagemId]);
   return resultado.first();
 }
 
@@ -354,6 +380,18 @@ async function lerEstrutura() {
   };
 }
 
+// Última estrutura conhecida. Relida ao abrir um canal, para perceber também
+// um ALTER TABLE feito direto no cqlsh. Se a coluna "fixada" apareceu ou
+// sumiu, avisa todas as páginas (que recarregam as mensagens).
+let estruturaAtual = null;
+async function sincronizarEstrutura(sempreAvisar = false) {
+  const nova = await lerEstrutura();
+  const mudou = estruturaAtual !== null && estruturaAtual.temColunaAlteracao !== nova.temColunaAlteracao;
+  estruturaAtual = nova;
+  if (mudou || sempreAvisar) io.emit('estrutura', nova);
+  return nova;
+}
+
 // Lê a mensagem de novo no banco e avisa todo mundo que está no canal
 async function avisarAtualizacao(canalId, bucket, mensagemId) {
   const atualizada = await buscarMensagem(canalId, bucket, mensagemId);
@@ -381,7 +419,7 @@ function tratar(socket, acao) {
 io.on('connection', (socket) => {
   // Lista de canais para a barra lateral e estrutura atual da tabela
   socket.emit('canais', Array.from(canais.values()));
-  lerEstrutura().then((e) => socket.emit('estrutura', e)).catch((e) => console.error('Erro:', e.message));
+  sincronizarEstrutura().then((e) => socket.emit('estrutura', e)).catch((e) => console.error('Erro:', e.message));
 
   // Alteração: ALTER TABLE adicionando a coluna (ou removendo, para ensaiar de novo)
   socket.on('alterar_tabela', tratar(socket, async (dados) => {
@@ -392,7 +430,7 @@ io.on('connection', (socket) => {
       if (acao === 'adicionar' && antes.temColunaAlteracao) throw new Error(`A coluna "${COLUNA_ALTERACAO.nome}" já existe.`);
       if (acao === 'remover' && !antes.temColunaAlteracao) throw new Error(`A coluna "${COLUNA_ALTERACAO.nome}" não existe.`);
       await executar('ALTER', acao === 'adicionar' ? CQL.adicionarColuna : CQL.removerColuna);
-      io.emit('estrutura', await lerEstrutura());
+      await sincronizarEstrutura(true);
     });
   }));
 
@@ -405,15 +443,16 @@ io.on('connection', (socket) => {
       if (sala !== socket.id) socket.leave(sala);
     }
     socket.join(canalId);
+    await sincronizarEstrutura();
 
     const bucketAtual = bucketDaData(new Date());
-    const resultado = await executar('READ', CQL.lerMensagens, [canalId, bucketAtual, LIMITE_HISTORICO]);
+    const resultado = await lerComFixada(CQL.lerMensagens, CQL.lerMensagensComFixada, [canalId, bucketAtual, LIMITE_HISTORICO]);
     let mensagens = resultado.rows.map((l) => linhaParaMensagem(l, canalId, bucketAtual));
 
     // Se o mês está começando, completa com o mês anterior (outra partição)
     if (mensagens.length < LIMITE_HISTORICO) {
       const bucketAnt = bucketAnterior(bucketAtual);
-      const anterior = await executar('READ', CQL.lerMensagens, [canalId, bucketAnt, LIMITE_HISTORICO - mensagens.length]);
+      const anterior = await lerComFixada(CQL.lerMensagens, CQL.lerMensagensComFixada, [canalId, bucketAnt, LIMITE_HISTORICO - mensagens.length]);
       mensagens = mensagens.concat(anterior.rows.map((l) => linhaParaMensagem(l, canalId, bucketAnt)));
     }
 
@@ -448,6 +487,7 @@ io.on('connection', (socket) => {
       autor,
       texto,
       editada: false,
+      fixada: false,
       reacoes: {},
       ttl: temporaria ? TTL_TEMPORARIA : null,
     };
@@ -501,6 +541,30 @@ io.on('connection', (socket) => {
     });
   }));
 
+  // Fixar / desafixar (UPDATE na coluna "fixada"). Só existe depois do ALTER TABLE.
+  // Qualquer pessoa pode fixar, como um aviso importante do canal.
+  socket.on('fixar', tratar(socket, async (dados) => {
+    const { canalId, bucket, mensagemId } = validarReferencia(dados);
+    const fixada = Boolean(dados.fixada);
+
+    const estrutura = await sincronizarEstrutura();
+    if (!estrutura.temColunaAlteracao) {
+      throw new Error(`A coluna "${COLUNA_ALTERACAO.nome}" não existe. Faça o ALTER TABLE primeiro.`);
+    }
+
+    // Mesmo cuidado da edição: UPDATE em linha que não existe criaria a linha
+    const atual = await buscarMensagem(canalId, bucket, mensagemId);
+    if (!atual) throw new Error('Essa mensagem não existe mais.');
+
+    if (atual.segundos_restantes) {
+      await executar('UPDATE', CQL.fixarMensagemComTtl, [atual.segundos_restantes, fixada, canalId, bucket, mensagemId]);
+    } else {
+      await executar('UPDATE', CQL.fixarMensagem, [fixada, canalId, bucket, mensagemId]);
+    }
+
+    await avisarAtualizacao(canalId, bucket, mensagemId);
+  }));
+
   // D - Delete: apagar mensagem
   socket.on('apagar', tratar(socket, async (dados) => {
     const { canalId, bucket, mensagemId } = validarReferencia(dados);
@@ -520,6 +584,7 @@ async function iniciar() {
   await conectarComTentativas();
   await prepararBanco();
   await preencherCanaisVazios();
+  await sincronizarEstrutura();
   servidor.listen(PORTA, () => {
     console.log('🚀 Chat rodando em http://localhost:%d', PORTA);
   });

@@ -79,9 +79,10 @@ Na hora, com o **Console do Cassandra** visível do lado direito:
 1. **Inserção:** mande uma mensagem. Aparece o `INSERT`.
 2. **Atualização:** passe o mouse numa mensagem **sua**, clique em ✏️, mude o texto e aperte Enter. Aparece o `UPDATE ... SET texto = ...`, e a mensagem ganha "(editada)".
 3. **Alteração:** no painel **Estrutura da tabela** (à direita), clique em **ALTER TABLE … ADD fixada boolean**. Aparece o `ALTER TABLE chat.mensagens_por_canal ADD fixada boolean`, e a coluna `fixada` surge na lista de colunas. Explique: a estrutura mudou na hora, sem reescrever nenhuma mensagem; as que já existem ficam com a coluna vazia (`null`).
+   - **Usando a coluna nova:** logo depois do ALTER, aparece o botão 📌 nas mensagens (antes ele não existia, porque não havia onde gravar). Clique em 📌 numa mensagem: aparece o `UPDATE ... SET fixada = true`, e a mensagem ganha a borda verde e a etiqueta "📌 fixada" em todas as janelas. Clique de novo para desafixar (`fixada = false`).
 4. **Exclusão:** numa mensagem sua, clique em 🗑️ e confirme. Aparece o `DELETE`.
 
-**Para ensaiar de novo:** depois da alteração, o mesmo botão vira **ALTER TABLE … DROP fixada**. Clique nele para tirar a coluna e deixar tudo pronto para a próxima vez. **Antes da apresentação, confira que o botão está mostrando `ADD fixada boolean`.**
+**Para ensaiar de novo:** depois da alteração, o mesmo botão vira **ALTER TABLE … DROP fixada**. Clique nele para tirar a coluna e deixar tudo pronto para a próxima vez. Ao tirar a coluna, o botão 📌 some e as marcações de fixada são apagadas junto com ela. **Antes da apresentação, confira que o botão está mostrando `ADD fixada boolean`.**
 
 ---
 
@@ -198,7 +199,7 @@ npm test            # testa as funções do servidor (não precisa do Cassandra)
 npm run test:e2e    # com o "docker compose up" rodando: testa o CRUD inteiro pelo chat
 ```
 
-O `test:e2e` abre dois "navegadores" ao mesmo tempo e confere: mensagem chegando em tempo real no outro, edição e exclusão só pelo autor, o `ALTER TABLE` (e o desfaz no fim, deixando a tabela como estava), 20 reações simultâneas sem perder nenhuma, exclusão de verdade (um UPDATE depois não "ressuscita" a mensagem) e mensagem com TTL.
+O `test:e2e` abre dois "navegadores" ao mesmo tempo e confere: mensagem chegando em tempo real no outro, edição e exclusão só pelo autor, o `ALTER TABLE` e o fixar na coluna nova (e desfaz o ALTER no fim, deixando a tabela como estava), 20 reações simultâneas sem perder nenhuma, exclusão de verdade (um UPDATE depois não "ressuscita" a mensagem) e mensagem com TTL.
 
 ### Por que as reações passam por uma fila
 
