@@ -171,7 +171,9 @@ function montarMensagem(msg) {
   bloco.dataset.id = msg.id;
   bloco.tabIndex = 0;
 
-  bloco.appendChild(criarAvatar(msg.autor));
+  // Uma linha criada por UPDATE (upsert) no cqlsh pode não ter autor
+  const nomeAutor = msg.autor || '(sem autor)';
+  bloco.appendChild(criarAvatar(nomeAutor));
 
   const corpo = document.createElement('div');
   corpo.className = 'corpo';
@@ -180,7 +182,7 @@ function montarMensagem(msg) {
   cabecalho.className = 'cabecalho';
   const autor = document.createElement('span');
   autor.className = 'autor';
-  autor.textContent = msg.autor;
+  autor.textContent = nomeAutor;
   const hora = document.createElement('span');
   hora.className = 'hora';
   hora.textContent = formatarHora(msg.criadaEm);
